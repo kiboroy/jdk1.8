@@ -82,12 +82,35 @@ public class LongAdder extends Striped64 implements Serializable {
      * @param x the value to add
      */
     public void add(long x) {
-        Cell[] as; long b, v; int m; Cell a;
+        // as是Striped64中的成员变量cells数组
+        // b是Striped64中的成员变量base，即基数值
+        // v是当前线程hash到cell中存储的值
+        // m是cells数组长度减1，hash时做掩码使用
+        // a当前线程hash得到的cells数组中的cell元素
+        Cell[] as;
+        long b, v;
+        int m;
+        Cell a;
+
+        // true 则说明出现过线程竞争
+        // 条件1：cell数组是否为空，首次首线程进来肯定为空，false。出现过线程竞争，创建了cells数组则不为空。
+        // 条件2：CAS更新base基数，出现线程竞争的话，CAS更新失败。进入if代码块中
         if ((as = cells) != null || !casBase(b = base, b + x)) {
+
+            // true 线程无竞争； false线程竞争激烈，多个线程hash到同一个cell，可能需要扩容
             boolean uncontended = true;
+
+            // 条件1：cell为空，说明出现线程竞争，与外层if判断的条件2相关
+            // 条件2：cells数组长度减1小于0，应该不会出现
+            // 条件3：当前线程hash得到的cells数组中的元素cell对象为空，说明当前当前线程还没有更新过cell，应该初始化一个cell。
+            //       getProbe()，返回线程中的threadLocalRandomProbe字段
+            //       它是通过随机数生成的一个值，对于一个确定的线程这个值是固定的（除非刻意修改过它）
+            // 条件4：CAS更新当前线程所命中的cell的值，失败则表明当前线程竞争很激烈，应当考虑扩容
             if (as == null || (m = as.length - 1) < 0 ||
                 (a = as[getProbe() & m]) == null ||
                 !(uncontended = a.cas(v = a.value, v + x)))
+
+                // 调用Striped64中的方法处理
                 longAccumulate(x, null, uncontended);
         }
     }
