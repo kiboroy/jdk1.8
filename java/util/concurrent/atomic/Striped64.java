@@ -211,34 +211,97 @@ abstract class Striped64 extends Number {
      * avoids the need for an extra field or function in LongAdder).
      * @param wasUncontended false if CAS failed before call
      */
+
+
+    /**
+     * Striped64中的一些变量和方法（及方法中的局部变量）的含义
+     *
+     * Cell[] cells: 槽数组，大小为2的幂
+     * long base: 类似于AtomicLong中的全局value值，无竞争的情况下数据直接累加到base上，或在cells扩容时，也需要吧数据累加到base上。
+     * int cellsBusy: 初始化cells或者cells扩容时，需要获取锁，0 表示无锁，1 表示其他线程已经持有锁。
+     * NCPU: 计算机cpu的核数，cells数组扩容时会用到。
+     *
+     * casCellsBusy(): 通过cas修改cellsBusy的值，cas成功代表获取到锁，返回true。
+     * getProbe(): 获取当前线程的hash值。probe hash value
+     * advanceProbe(): 重置当前线程的hash值。
+     *
+     * boolean collide: 表示扩容意向，false一定不扩容，true可能会扩容。
+     *
+     */
+
+    /**
+     *
+     * @param x 要累加的值
+     * @param fn
+     * @param wasUncontended 被调用之前CAS操作失败，则为false
+     */
     final void longAccumulate(long x, LongBinaryOperator fn,
                               boolean wasUncontended) {
+        // 线程的hash值
         int h;
+
+        // 获取当前线程的hash值，如果为0，给当前线程强制初始化一个非0的hash值
         if ((h = getProbe()) == 0) {
+
+            // 这两行代码执行完获取到的线程hash值肯定不为0，（详细略过，可以点进去看）
             ThreadLocalRandom.current(); // force initialization
             h = getProbe();
+
+            // 重新计算当前线程的hash值后，认为此次不算一次线程竞争（线程hash值都为0，肯定还未出现激烈的线程竞争，设置为true）
             wasUncontended = true;
         }
+
+        // 表示扩容意向，false一定不扩容，true可能会扩容。
         boolean collide = false;                // True if last slot nonempty
+
+        // 自旋死循环，（这段代码建议在ide中先收缩三个if条件来看）
         for (;;) {
-            Cell[] as; Cell a; int n; long v;
+
+            /**
+             * as: cells数组
+             * a: 当前线程命中的cells数组中的元素
+             * n: cells数组的长度
+             * v: 当前线程对应cells数组中的cell的值
+             */
+            Cell[] as;
+            Cell a;
+            int n;
+            long v;
+
+            // CASE 1：Cells数组已经初始化过了 （此时可能有多个线程命中同一个cell的情况）
             if ((as = cells) != null && (n = as.length) > 0) {
+
+                // 当前线程命中的cells数组中的cell元素值为空，则要将累加值x设置进cells数组中对应位置
                 if ((a = as[(n - 1) & h]) == null) {
+                    // 如果cells数组当前无锁，则新建cell元素，设置为累加值x
                     if (cellsBusy == 0) {       // Try to attach new Cell
                         Cell r = new Cell(x);   // Optimistically create
+                        // double check lock
+                        // 如果cells数组当前无锁，并且cas获取cells数组锁成功，则将cell元素设置到cells数组对应位置
                         if (cellsBusy == 0 && casCellsBusy()) {
                             boolean created = false;
                             try {               // Recheck under lock
+                                // rs: cells数组
+                                // m: cells数组长度
+                                // j: 当前线程hash值计算得出的cells数组对应的下标index
                                 Cell[] rs; int m, j;
+                                // double check lock
+                                // cells数组不为空 且cells数组长度大于0 且当前线程命中的cells数组中的cell值为空时
+                                // 将cell值设置到cells数组中，当前线程对应下标的位置上
                                 if ((rs = cells) != null &&
                                     (m = rs.length) > 0 &&
                                     rs[j = (m - 1) & h] == null) {
+
                                     rs[j] = r;
+                                    // 标记新建cell并设置进数组状态为true
                                     created = true;
                                 }
                             } finally {
+                                // 释放cells数组的锁
                                 cellsBusy = 0;
                             }
+                            // 新建cell元素并设置进数组中成功，则自旋死循环终止
+                            // 否则跳出本次自旋死循环
                             if (created)
                                 break;
                             continue;           // Slot is now non-empty
@@ -246,46 +309,79 @@ abstract class Striped64 extends Number {
                     }
                     collide = false;
                 }
+
+                // wasUncontended 为false表明线程竞争激烈，简单设置wasUncontended为true，让当前线程走到下面去rehash
                 else if (!wasUncontended)       // CAS already known to fail
                     wasUncontended = true;      // Continue after rehash
+
+                // 当前线程命中的cells数组中的cell元素不为空，尝试cas更新，累加x到此cell元素中，
+                // cas操作成功，则自旋循环终止
                 else if (a.cas(v = a.value, ((fn == null) ? v + x :
                                              fn.applyAsLong(v, x))))
                     break;
+
+                // cells数组长度大于等于cpu核数
+                // 或当前线程执行的方法体中的cells数组局部变量不等于外层cells数组成员变量。（也即cells数组已被其他线程扩容）
+                // 则将collide扩容意向设置为 false，一定不扩容
                 else if (n >= NCPU || cells != as)
                     collide = false;            // At max size or stale
+
+                // collide扩容意向为false 时将其设置为 true（保证数组长度还未到最大值时仍然能够扩容）
                 else if (!collide)
                     collide = true;
+
+                // cells数组锁标志位为0，且当前线程cas获取cells数组的锁成功时，对cells数组进行扩容
                 else if (cellsBusy == 0 && casCellsBusy()) {
                     try {
+                        // double check lock
                         if (cells == as) {      // Expand table unless stale
+                            // 数组扩容2倍，并迁移数据
                             Cell[] rs = new Cell[n << 1];
                             for (int i = 0; i < n; ++i)
                                 rs[i] = as[i];
                             cells = rs;
                         }
                     } finally {
+                        // 释放cells数组的锁
                         cellsBusy = 0;
                     }
+                    // 将collide扩容意向设置为false，一定不扩容
+                    // 并跳出本次自旋死循环
                     collide = false;
                     continue;                   // Retry with expanded table
                 }
+                // 重新计算当前线程的hash值
+                //（只要自旋死循环未终止，在本层if中最后都重置当前线程hash值，为的就是hash散列更均匀，降低热点冲突）
                 h = advanceProbe(h);
             }
+
+            // CASE 2：Cells数组没有加锁且未初始化，尝试对cells数组加锁并初始化
             else if (cellsBusy == 0 && cells == as && casCellsBusy()) {
                 boolean init = false;
                 try {                           // Initialize table
+                    // 类似双端检索策略，double check lock
+                    // 防止运行到此处时，本线程被挂起，所以要再次确认cells数组是否还是挂起前的状态
+                    // 这样保证只有一个线程去初始化cells数组（也即cells数组只能被初始化一次）
                     if (cells == as) {
+                        // 1、初始化cells数组长度为2
+                        // 2、根据当前线程的hash值计算对应cells数组的下标，将要累加的值x设置到cell对象中，并放到数组对应下标的位置
+                        // 3、标记init为true
                         Cell[] rs = new Cell[2];
                         rs[h & 1] = new Cell(x);
                         cells = rs;
                         init = true;
                     }
                 } finally {
+                    // 释放cells数组的锁
                     cellsBusy = 0;
                 }
+                // 初始化完成，自旋循环终止
                 if (init)
                     break;
             }
+
+            // CASE 3：Cells数组正在初始化中，尝试在base基数上进行累加（兜底逻辑）
+            // cas累加x到base基数中，cas成功则自旋循环终止
             else if (casBase(v = base, ((fn == null) ? v + x :
                                         fn.applyAsLong(v, x))))
                 break;                          // Fall back on using base
