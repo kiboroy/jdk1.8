@@ -216,7 +216,7 @@ abstract class Striped64 extends Number {
     /**
      * Striped64中的一些变量和方法（及方法中的局部变量）的含义
      *
-     * Cell[] cells: 槽数组，大小为2的幂
+     * Cell[] cells: 槽数组，大小为2的幂，（大于等于cpu核数将不会再扩容）
      * long base: 类似于AtomicLong中的全局value值，无竞争的情况下数据直接累加到base上，或在cells扩容时，也需要吧数据累加到base上。
      * int cellsBusy: 初始化cells或者cells扩容时，需要获取锁，0 表示无锁，1 表示其他线程已经持有锁。
      * NCPU: 计算机cpu的核数，cells数组扩容时会用到。

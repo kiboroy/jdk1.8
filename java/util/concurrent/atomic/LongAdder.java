@@ -100,7 +100,7 @@ public class LongAdder extends Striped64 implements Serializable {
             // true 线程无竞争； false线程竞争激烈，多个线程hash到同一个cell，可能需要扩容
             boolean uncontended = true;
 
-            // 条件1：cell为空，说明出现线程竞争，与外层if判断的条件2相关
+            // 条件1：cells为空，说明出现线程竞争，与外层if判断的条件2相关
             // 条件2：cells数组长度减1小于0，应该不会出现
             // 条件3：当前线程hash得到的cells数组中的元素cell对象为空，说明当前当前线程还没有更新过cell，应该初始化一个cell。
             //       getProbe()，返回线程中的threadLocalRandomProbe字段
@@ -137,6 +137,18 @@ public class LongAdder extends Striped64 implements Serializable {
      * incorporated.
      *
      * @return the sum
+     */
+
+    /**
+     * 返回累加的和，也就是"当前时刻"的计数值
+     *
+     * 这个值不一定准确，因为调用这个方法时，还可能有其他线程在计数累加
+     * 方法返回时刻和调用时刻并不是同一个时间点，在有并发的情况下，这个值只是近似准确的计数值
+     *
+     * 高并发时，除非全局加锁，否则得不到程序运行某个时刻的绝对准确的值
+     *
+     *
+     * @return
      */
     public long sum() {
         Cell[] as = cells; Cell a;
